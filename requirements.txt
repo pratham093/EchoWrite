@@ -1,28 +1,25 @@
-# Core dependencies
-streamlit>=1.28.0
-google-generativeai>=0.3.0
-python-dotenv>=1.0.0
+# Core AI
+google-generativeai>=0.8.0
+numpy>=1.24.0
+
+# Web Scraping
 requests>=2.31.0
 beautifulsoup4>=4.12.0
-
-# AI and ML
-numpy>=1.24.0
-pandas>=2.0.0
-
-# Web scraping
 playwright>=1.40.0
 
-# Vector database
-chromadb>=0.4.0
+# Semantic Search
+chromadb>=0.4.22
 
-# Voice support (optional)
-gTTS>=2.4.0
-pygame>=2.5.0
+# UI
+streamlit>=1.38.0
+pandas>=2.0.0
+plotly>=5.18.0
+
+# Voice
+gtts>=2.5.0
 SpeechRecognition>=3.10.0
+pygame>=2.5.0
 pyttsx3>=2.90
 
-# Visualization
-plotly>=5.17.0
-
-# Windows TTS (optional, Windows only)
-# pywin32>=305
+# Config
+python-dotenv>=1.0.0

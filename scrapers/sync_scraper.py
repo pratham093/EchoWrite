@@ -1,193 +1,179 @@
+"""
+Synchronous Web Scraper with multi-method screenshot capture.
+Provides fallback chain: Playwright → Selenium → Pyppeteer → HTML save.
+"""
+
 import os
-import sys
-import json
-import tempfile
-import subprocess
 from datetime import datetime
-import requests
-from bs4 import BeautifulSoup
 from pathlib import Path
 
-class SyncWebScraper:
-    def __init__(self):
-        self.screenshot_dir = Path("screenshots")
-        self.screenshot_dir.mkdir(exist_ok=True)
+import requests
+from bs4 import BeautifulSoup
 
+from config.settings import settings
+
+
+class SyncWebScraper:
+    """Sync scraper using requests + BeautifulSoup, with screenshot fallbacks."""
+
+    def __init__(self):
+        self.screenshot_dir = settings.SCREENSHOT_DIR
+        self.screenshot_dir.mkdir(parents=True, exist_ok=True)
+
+    # ------------------------------------------------------------------
+    # Main entry point
+    # ------------------------------------------------------------------
     def scrape_url(self, url: str) -> dict:
+        """Fetch URL, extract cleaned text, and attempt a screenshot."""
         try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-            response = requests.get(url, headers=headers, timeout=30)
+            headers = {"User-Agent": settings.USER_AGENT}
+            response = requests.get(url, headers=headers, timeout=settings.SCRAPE_TIMEOUT)
             response.raise_for_status()
-            
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
+
+            soup = BeautifulSoup(response.text, "html.parser")
+
+            # Try content selectors in priority order
             content = ""
-            for selector in ['#mw-content-text', 'article', 'main', '.content', '#content']:
-                element = soup.find(id=selector[1:] if selector.startswith('#') else None,
-                                  class_=selector[1:] if selector.startswith('.') else None,
-                                  name=selector if not selector.startswith(('#', '.')) else None)
+            selectors = [
+                ("#mw-content-text", "id"),
+                ("article", "tag"),
+                ("main", "tag"),
+                (".content", "class"),
+                ("#content", "id"),
+            ]
+
+            for selector, sel_type in selectors:
+                element = None
+                if sel_type == "id":
+                    element = soup.find(id=selector.lstrip("#"))
+                elif sel_type == "class":
+                    element = soup.find(class_=selector.lstrip("."))
+                elif sel_type == "tag":
+                    element = soup.find(selector)
+
                 if element:
-                    for tag in element(['script', 'style', 'nav', 'aside']):
+                    # Strip noise tags
+                    for tag in element(["script", "style", "nav", "aside", "footer", "header"]):
                         tag.decompose()
-                    content = element.get_text(strip=True, separator='\n')
+                    content = element.get_text(strip=True, separator="\n")
                     break
-            
+
             if not content:
-                content = soup.get_text(strip=True, separator='\n')
-            
-            lines = [line.strip() for line in content.split('\n') if line.strip()]
-            content = '\n'.join(lines)
-            
+                content = soup.get_text(strip=True, separator="\n")
+
+            # Clean whitespace
+            lines = [line.strip() for line in content.split("\n") if line.strip()]
+            content = "\n".join(lines)
+
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            
-            screenshot_path = self.capture_screenshot_simple(url, timestamp)
-            
+            screenshot_path = self._capture_screenshot(url, timestamp)
+
             return {
-                'content': content,
-                'title': soup.title.string if soup.title else 'No title',
-                'url': url,
-                'success': True,
-                'timestamp': timestamp,
-                'screenshot': screenshot_path
+                "content": content,
+                "title": soup.title.string if soup.title else "No title",
+                "url": url,
+                "success": True,
+                "timestamp": timestamp,
+                "screenshot": screenshot_path,
             }
-            
+
         except Exception as e:
             return {
-                'content': '',
-                'error': str(e),
-                'url': url,
-                'success': False,
-                'timestamp': datetime.now().strftime("%Y%m%d_%H%M%S"),
-                'screenshot': None
+                "content": "",
+                "error": str(e),
+                "url": url,
+                "success": False,
+                "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S"),
+                "screenshot": None,
             }
-    
-    def capture_screenshot_simple(self, url: str, timestamp: str) -> str:
-        """Simple screenshot capture using multiple methods"""
-        
+
+    # ------------------------------------------------------------------
+    # Screenshot fallback chain
+    # ------------------------------------------------------------------
+    def _capture_screenshot(self, url: str, timestamp: str) -> str | None:
+        """Try multiple screenshot backends; return path or None."""
         methods = [
             self._screenshot_playwright,
             self._screenshot_selenium,
             self._screenshot_pyppeteer,
-            self._screenshot_requests_html
+            self._save_html_fallback,
         ]
-        
         for method in methods:
             try:
-                screenshot_path = method(url, timestamp)
-                if screenshot_path and Path(screenshot_path).exists():
-                    print(f"✅ Screenshot saved: {screenshot_path}")
-                    return screenshot_path
+                path = method(url, timestamp)
+                if path and Path(path).exists():
+                    print(f"✅ Screenshot saved: {path}")
+                    return path
             except Exception as e:
-                print(f"Screenshot method failed: {e}")
-                continue
-        
-        print("⚠️ All screenshot methods failed - saving HTML instead")
-        return self._save_html_as_screenshot(url, timestamp)
-    
-    def _screenshot_playwright(self, url: str, timestamp: str) -> str:
-        """Method 1: Using Playwright"""
+                print(f"⚠️  Screenshot method {method.__name__} failed: {e}")
+        print("⚠️  All screenshot methods failed")
+        return None
+
+    def _screenshot_playwright(self, url: str, ts: str) -> str:
         from playwright.sync_api import sync_playwright
-        
+
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
             page.goto(url, wait_until="networkidle")
-            
-            screenshot_path = self.screenshot_dir / f"{timestamp}_playwright.png"
-            page.screenshot(path=str(screenshot_path), full_page=True)
-            
+            path = str(self.screenshot_dir / f"{ts}_playwright.png")
+            page.screenshot(path=path, full_page=True)
             browser.close()
-            return str(screenshot_path)
-    
-    def _screenshot_selenium(self, url: str, timestamp: str) -> str:
-        """Method 2: Using Selenium"""
+        return path
+
+    def _screenshot_selenium(self, url: str, ts: str) -> str:
         from selenium import webdriver
         from selenium.webdriver.chrome.options import Options
         from selenium.webdriver.chrome.service import Service
         from webdriver_manager.chrome import ChromeDriverManager
-        
-        options = Options()
-        options.add_argument('--headless')
-        options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--disable-gpu')
-        options.add_argument('--window-size=1920,1080')
-        
+
+        opts = Options()
+        for flag in [
+            "--headless",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--window-size=1920,1080",
+        ]:
+            opts.add_argument(flag)
         service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=options)
-        
+        driver = webdriver.Chrome(service=service, options=opts)
         driver.get(url)
         driver.implicitly_wait(5)
-        
-        screenshot_path = self.screenshot_dir / f"{timestamp}_selenium.png"
-        driver.save_screenshot(str(screenshot_path))
+        path = str(self.screenshot_dir / f"{ts}_selenium.png")
+        driver.save_screenshot(path)
         driver.quit()
-        
-        return str(screenshot_path)
-    
-    def _screenshot_pyppeteer(self, url: str, timestamp: str) -> str:
-        """Method 3: Using Pyppeteer"""
+        return path
+
+    def _screenshot_pyppeteer(self, url: str, ts: str) -> str:
         import asyncio
         from pyppeteer import launch
-        
-        async def capture():
-            browser = await launch(headless=True, args=['--no-sandbox'])
+
+        async def _capture():
+            browser = await launch(headless=True, args=["--no-sandbox"])
             page = await browser.newPage()
-            await page.goto(url, {'waitUntil': 'networkidle2'})
-            
-            screenshot_path = self.screenshot_dir / f"{timestamp}_pyppeteer.png"
-            await page.screenshot({'path': str(screenshot_path), 'fullPage': True})
-            
+            await page.goto(url, {"waitUntil": "networkidle2"})
+            p = str(self.screenshot_dir / f"{ts}_pyppeteer.png")
+            await page.screenshot({"path": p, "fullPage": True})
             await browser.close()
-            return str(screenshot_path)
-        
-        return asyncio.get_event_loop().run_until_complete(capture())
-    
-    def _screenshot_requests_html(self, url: str, timestamp: str) -> str:
-        """Method 4: Using requests-html"""
-        from requests_html import HTMLSession
-        
-        session = HTMLSession()
-        r = session.get(url)
-        r.html.render(timeout=20)
-        
-        screenshot_path = self.screenshot_dir / f"{timestamp}_requests_html.png"
-        r.html.screenshot(str(screenshot_path))
-        
-        return str(screenshot_path)
-    
-    def _save_html_as_screenshot(self, url: str, timestamp: str) -> str:
-        """Fallback: Save HTML content when screenshot fails"""
+            return p
+
+        loop = asyncio.new_event_loop()
         try:
-            response = requests.get(url, timeout=10)
-            html_path = self.screenshot_dir / f"{timestamp}_content.html"
-            
-            with open(html_path, 'w', encoding='utf-8') as f:
-                f.write(f"""
-                <html>
-                <head>
-                    <title>Captured: {url}</title>
-                    <style>
-                        body {{ font-family: Arial, sans-serif; padding: 20px; }}
-                        .meta {{ background: #f0f0f0; padding: 10px; margin-bottom: 20px; }}
-                    </style>
-                </head>
-                <body>
-                    <div class="meta">
-                        <h2>Page Capture</h2>
-                        <p><strong>URL:</strong> {url}</p>
-                        <p><strong>Captured:</strong> {timestamp}</p>
-                    </div>
-                    <div class="content">
-                        {response.text}
-                    </div>
-                </body>
-                </html>
-                """)
-            
-            print(f"📄 HTML saved: {html_path}")
-            return str(html_path)
-        except:
-            return None
+            asyncio.set_event_loop(loop)
+            return loop.run_until_complete(_capture())
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    def _save_html_fallback(self, url: str, ts: str) -> str:
+        """Last resort — save rendered HTML to disk."""
+        resp = requests.get(url, timeout=10)
+        html_path = str(self.screenshot_dir / f"{ts}_content.html")
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(
+                f"<html><head><title>Captured: {url}</title></head>"
+                f"<body><p><b>URL:</b> {url}<br><b>Time:</b> {ts}</p>"
+                f"<hr>{resp.text}</body></html>"
+            )
+        return html_path

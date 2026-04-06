@@ -1,0 +1,26 @@
+# Environment
+.env
+venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data directories
+chroma_db/
+reward_data/
+content_versions/
+storage/
+output/
+screenshots/
+
+# Archives
+*.tar.gz

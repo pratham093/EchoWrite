@@ -1,46 +1,68 @@
+"""
+Writer Agent — Rewrites raw scraped content into a target style using Gemini.
+Part of the multi-agent Writer → Reviewer → Editor pipeline.
+"""
+
 import time
 import google.generativeai as genai
+
 from config.settings import settings
 
+
 class WriterAgent:
-    def __init__(self, model_name: str = "gemini-2.0-flash-exp", temperature: float = 0.7):
+    """Generates rewritten content from raw source material."""
+
+    STYLE_PROMPTS = {
+        "engaging": "Make it vivid, compelling, and easy to read with strong hooks.",
+        "professional": "Use a polished, authoritative tone suitable for business audiences.",
+        "casual": "Write in a friendly, conversational, approachable tone.",
+        "academic": "Use formal, well-structured prose with precise terminology.",
+        "creative": "Be expressive and literary — use metaphor, imagery, and narrative flair.",
+    }
+
+    def __init__(self, model_name: str | None = None, temperature: float | None = None):
         genai.configure(api_key=settings.GEMINI_API_KEY)
-        self.model_name = model_name
-        self.temperature = temperature
+        self.model_name = model_name or settings.MODEL_NAME
+        self.temperature = temperature if temperature is not None else settings.TEMPERATURE
         self.model = genai.GenerativeModel(self.model_name)
 
     def rewrite_content(self, content: str, style: str = "engaging") -> dict:
-        # Prepare content preview to fit token limits
-        preview = content if len(content) <= 3000 else content[:3000] + "..."
+        """
+        Rewrite *content* in the requested *style*.
+        Returns dict with 'rewritten' text and 'metadata'.
+        """
+        preview = content[:3000] + "..." if len(content) > 3000 else content
+        style_guidance = self.STYLE_PROMPTS.get(style, self.STYLE_PROMPTS["engaging"])
+
         prompt = (
-            f"You are an expert content writer. Rewrite the following content to be more {style}. "
-            "Keep the core information but improve readability and engagement."
-            f"\n\nOriginal content:\n{preview}\n\nRewritten version:" 
+            f"You are an expert content writer.\n"
+            f"Style goal: {style} — {style_guidance}\n\n"
+            f"Rewrite the following content while preserving all core information.\n"
+            f"Improve readability, structure, and engagement.\n\n"
+            f"--- ORIGINAL CONTENT ---\n{preview}\n\n"
+            f"--- REWRITTEN VERSION ---"
         )
 
-        start_time = time.perf_counter()
+        start = time.perf_counter()
         try:
-            # Use generation_config for temperature
-            generation_config = genai.GenerationConfig(
+            gen_cfg = genai.GenerationConfig(
                 temperature=self.temperature,
-                max_output_tokens=8192,
+                max_output_tokens=settings.MAX_OUTPUT_TOKENS,
             )
-            
-            response = self.model.generate_content(
-                prompt,
-                generation_config=generation_config
-            )
-            
+            response = self.model.generate_content(prompt, generation_config=gen_cfg)
             rewritten = response.text.strip()
-            duration = time.perf_counter() - start_time
-            
+            duration = time.perf_counter() - start
+
             return {
                 "rewritten": rewritten,
                 "metadata": {
                     "model": self.model_name,
+                    "style": style,
                     "temperature": self.temperature,
-                    "processing_time": duration
-                }
+                    "processing_time": duration,
+                    "original_length": len(content),
+                    "rewritten_length": len(rewritten),
+                },
             }
         except Exception as e:
-            raise RuntimeError(f"AI generation failed: {e}")
+            raise RuntimeError(f"WriterAgent generation failed: {e}")
