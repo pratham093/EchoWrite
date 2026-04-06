@@ -4,7 +4,8 @@ Part of the multi-agent Writer → Reviewer → Editor pipeline.
 """
 
 import time
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 from config.settings import settings
 
@@ -21,10 +22,9 @@ class WriterAgent:
     }
 
     def __init__(self, model_name: str | None = None, temperature: float | None = None):
-        genai.configure(api_key=settings.GEMINI_API_KEY)
+        self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
         self.model_name = model_name or settings.MODEL_NAME
         self.temperature = temperature if temperature is not None else settings.TEMPERATURE
-        self.model = genai.GenerativeModel(self.model_name)
 
     def rewrite_content(self, content: str, style: str = "engaging") -> dict:
         """
@@ -45,11 +45,13 @@ class WriterAgent:
 
         start = time.perf_counter()
         try:
-            gen_cfg = genai.GenerationConfig(
+            config = types.GenerateContentConfig(
                 temperature=self.temperature,
                 max_output_tokens=settings.MAX_OUTPUT_TOKENS,
             )
-            response = self.model.generate_content(prompt, generation_config=gen_cfg)
+            response = self.client.models.generate_content(
+                model=self.model_name, contents=prompt, config=config
+            )
             rewritten = response.text.strip()
             duration = time.perf_counter() - start
 

@@ -5,7 +5,8 @@ Returns structured quality scores and improvement suggestions.
 
 import time
 import json
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 from config.settings import settings
 
@@ -14,10 +15,9 @@ class ReviewerAgent:
     """Scores content on quality, clarity, engagement, and accuracy."""
 
     def __init__(self, model_name: str | None = None, temperature: float | None = None):
-        genai.configure(api_key=settings.GEMINI_API_KEY)
+        self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
         self.model_name = model_name or settings.MODEL_NAME
         self.temperature = temperature if temperature is not None else settings.TEMPERATURE
-        self.model = genai.GenerativeModel(self.model_name)
 
     def review_content(self, original: str, rewritten: str) -> dict:
         """
@@ -45,11 +45,13 @@ class ReviewerAgent:
         data: dict = {}
 
         try:
-            gen_cfg = genai.GenerationConfig(
+            config = types.GenerateContentConfig(
                 temperature=self.temperature,
                 max_output_tokens=2048,
             )
-            response = self.model.generate_content(prompt, generation_config=gen_cfg)
+            response = self.client.models.generate_content(
+                model=self.model_name, contents=prompt, config=config
+            )
             text = response.text.strip()
 
             # Extract JSON from potentially wrapped response
