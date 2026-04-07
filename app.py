@@ -25,6 +25,8 @@ from storage.version_manager import VersionManager
 from rl_models.reward_model import RewardModel
 from rl_models.inference_engine import ContentSelectionEngine
 from search.semantic_search import SemanticSearch
+from config.settings import settings
+from agents.voice_interface import VoiceInterface, SPEECH_RECOGNITION_AVAILABLE
 
 # ── Page config ──────────────────────────────────────────────────────
 st.set_page_config(
@@ -96,6 +98,14 @@ def process_url(url: str, style: str, max_iterations: int, use_rl: bool = False)
     """Scrape → Write → Review → Edit loop with progress reporting."""
     progress = st.empty()
     status = st.empty()
+
+    # ── Validate API key before starting ────────────────────────
+    if not settings.GEMINI_API_KEY or settings.GEMINI_API_KEY == "your-gemini-api-key-here":
+        status.error(
+            "⛔ GEMINI_API_KEY is not configured. "
+            "Please set a valid API key in your environment or Streamlit secrets."
+        )
+        return None
 
     status.info("🔄 Scraping content…")
     progress.progress(0.05, "Fetching page…")
@@ -221,7 +231,7 @@ def main():
         stats = vm.get_statistics()
         st.metric("Stored Versions", stats["total_versions"])
 
-    tabs = st.tabs(["📝 Process", "📊 Analytics", "🧠 Training", "🔍 Search", "📚 History", "⚙️ Settings"])
+    tabs = st.tabs(["📝 Process", "🎤 Voice", "📊 Analytics", "🧠 Training", "🔍 Search", "📚 History", "⚙️ Settings"])
 
     # ── TAB 0 — Process ──────────────────────────────────────────
     with tabs[0]:
@@ -254,24 +264,28 @@ def main():
                 if result:
                     _render_result(result)
 
-    # ── TAB 1 — Analytics ────────────────────────────────────────
+    # ── TAB 1 — Voice ──────────────────────────────────────────
     with tabs[1]:
+        _render_voice()
+
+    # ── TAB 2 — Analytics ────────────────────────────────────────
+    with tabs[2]:
         _render_analytics()
 
-    # ── TAB 2 — Training / Feedback ──────────────────────────────
-    with tabs[2]:
+    # ── TAB 3 — Training / Feedback ──────────────────────────────
+    with tabs[3]:
         _render_training()
 
-    # ── TAB 3 — Semantic Search ──────────────────────────────────
-    with tabs[3]:
+    # ── TAB 4 — Semantic Search ──────────────────────────────────
+    with tabs[4]:
         _render_search()
 
-    # ── TAB 4 — History ──────────────────────────────────────────
-    with tabs[4]:
+    # ── TAB 5 — History ──────────────────────────────────────────
+    with tabs[5]:
         _render_history()
 
-    # ── TAB 5 — Settings ─────────────────────────────────────────
-    with tabs[5]:
+    # ── TAB 6 — Settings ─────────────────────────────────────────
+    with tabs[6]:
         _render_settings()
 
 
@@ -523,6 +537,158 @@ def _render_history():
             if st.button("View content", key=f"hist_{i}"):
                 st.text_area("Original", job["original"][:1000], height=200, key=f"ho_{i}")
                 st.text_area("Final", job["final"][:1000], height=200, key=f"hf_{i}")
+
+
+def _tts_generate(text: str, lang: str = "en"):
+    """Generate TTS audio bytes from text. Returns BytesIO or None."""
+    try:
+        from gtts import gTTS
+        import io
+        tts = gTTS(text=text, lang=lang)
+        buf = io.BytesIO()
+        tts.write_to_fp(buf)
+        buf.seek(0)
+        return buf
+    except Exception:
+        return None
+
+
+def _render_voice():
+    st.header("🎤 Voice Control")
+    st.markdown("Speak commands or convert text to speech.")
+
+    voice = VoiceInterface()
+
+    # ── Two columns: Voice Input + Text-to-Speech ────────────────
+    col_stt, col_tts = st.columns(2)
+
+    # ── LEFT: Speech-to-Text (Voice Commands) ────────────────────
+    with col_stt:
+        st.subheader("🎙️ Voice Commands")
+        st.caption("Record a command using your mic.")
+        audio_data = st.audio_input("Click to record")
+
+        if audio_data is not None:
+            if not SPEECH_RECOGNITION_AVAILABLE:
+                st.error("SpeechRecognition package not available.")
+                return
+
+            import speech_recognition as sr
+            recognizer = sr.Recognizer()
+
+            with st.spinner("Transcribing..."):
+                try:
+                    audio_file = sr.AudioFile(audio_data)
+                    with audio_file as source:
+                        audio = recognizer.record(source)
+                    transcript = recognizer.recognize_google(audio, language=settings.VOICE_LANGUAGE)
+                except sr.UnknownValueError:
+                    st.warning("Could not understand the audio. Please try again.")
+                    return
+                except Exception as e:
+                    st.error(f"Transcription failed: {e}")
+                    return
+
+            st.success(f"**You said:** {transcript}")
+
+            command = voice.parse_voice_command(transcript)
+            intent = command.get("intent", "unknown")
+            st.info(f"**Detected intent:** `{intent}`")
+
+            if intent == "process_url":
+                url = command.get("url")
+                style = command.get("style", "engaging")
+                if url:
+                    st.write(f"Processing **{url}** in *{style}* style...")
+                    result = process_url(url, style, max_iterations=3)
+                    if result:
+                        _render_result(result)
+                else:
+                    st.warning("Say a command with a URL, e.g. *'Process https://example.com in professional style'*")
+
+            elif intent == "search":
+                query = command.get("query", "")
+                if query:
+                    st.write(f"Searching for: **{query}**")
+                    results = search_engine.search(query, n_results=5)
+                    if results:
+                        for r in results:
+                            st.markdown(f"- **{r.get('url', 'N/A')}** (score: {r.get('score', 'N/A'):.2f})")
+                    else:
+                        st.info("No results found.")
+                else:
+                    st.warning("No search query detected.")
+
+            elif intent == "get_status":
+                stats = vm.get_statistics()
+                st.json(stats)
+
+            elif intent == "help":
+                st.markdown(
+                    "**Available voice commands:**\n"
+                    "- *\"Process [URL] in [style] style\"* — rewrite content\n"
+                    "- *\"Search for [topic]\"* — semantic search\n"
+                    "- *\"Status\"* — show system stats\n"
+                    "- *\"Help\"* — show this list"
+                )
+            else:
+                st.warning(f"Unrecognized command: *{transcript}*. Say **help** for available commands.")
+
+            # Auto TTS response
+            response_text = {
+                "process_url": f"Processing content in {command.get('style', 'engaging')} style.",
+                "search": f"Searching for {command.get('query', 'your query')}.",
+                "get_status": "Here are the current system statistics.",
+                "help": "Here are the available voice commands.",
+            }.get(intent, f"I heard: {transcript}")
+
+            audio_out = _tts_generate(response_text, settings.VOICE_LANGUAGE)
+            if audio_out:
+                st.audio(audio_out, format="audio/mp3", autoplay=True)
+
+    # ── RIGHT: Text-to-Speech ────────────────────────────────────
+    with col_tts:
+        st.subheader("🔊 Text-to-Speech")
+        st.caption("Type or paste any text and hear it read aloud.")
+
+        tts_text = st.text_area(
+            "Enter text to read aloud",
+            height=200,
+            placeholder="Paste your content here...",
+        )
+
+        tts_col1, tts_col2 = st.columns(2)
+        with tts_col1:
+            tts_lang = st.selectbox("Language", ["en", "es", "fr", "de", "hi", "ja", "ko", "zh-CN"], index=0)
+        with tts_col2:
+            read_speed = st.checkbox("Slow speed", value=False)
+
+        if st.button("🔊 Read Aloud", type="primary", use_container_width=True):
+            if not tts_text.strip():
+                st.warning("Please enter some text first.")
+            else:
+                with st.spinner("Generating audio..."):
+                    try:
+                        from gtts import gTTS
+                        import io
+                        tts = gTTS(text=tts_text.strip(), lang=tts_lang, slow=read_speed)
+                        buf = io.BytesIO()
+                        tts.write_to_fp(buf)
+                        buf.seek(0)
+                        st.audio(buf, format="audio/mp3", autoplay=True)
+                        st.success("Audio generated! Press play above.")
+                    except Exception as e:
+                        st.error(f"TTS generation failed: {e}")
+
+    # ── Help section at the bottom ───────────────────────────────
+    with st.expander("ℹ️ How to use Voice Control"):
+        st.markdown(
+            "**Voice Commands (left):** Click the mic, speak a command, and EchoWrite will "
+            "transcribe it, detect your intent, and execute it. The app also speaks back a response.\n\n"
+            "**Text-to-Speech (right):** Paste any text — an article, your rewritten content, notes — "
+            "and click *Read Aloud* to hear it. Supports multiple languages.\n\n"
+            "**Tip:** After processing content in the Process tab, copy the result here to listen to it!"
+        )
 
 
 def _render_settings():

@@ -70,4 +70,15 @@ class EditorAgent:
                 },
             }
         except Exception as e:
-            raise RuntimeError(f"EditorAgent generation failed: {e}")
+            duration = time.perf_counter() - start
+            return {
+                "improved": content,  # return original content as fallback
+                "metadata": {
+                    "model": self.model_name,
+                    "temperature": self.temperature,
+                    "processing_time": duration,
+                    "improvements_applied": improvements,
+                    "had_human_feedback": human_feedback is not None,
+                    "error": str(e),
+                },
+            }

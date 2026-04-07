@@ -67,4 +67,9 @@ class WriterAgent:
                 },
             }
         except Exception as e:
-            raise RuntimeError(f"WriterAgent generation failed: {e}")
+            duration = time.perf_counter() - start
+            raise RuntimeError(
+                f"WriterAgent generation failed: {e}\n\n"
+                "If you see PERMISSION_DENIED, your Gemini API key may be "
+                "invalid or revoked. Please set a valid GEMINI_API_KEY."
+            )

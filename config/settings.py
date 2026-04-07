@@ -12,12 +12,24 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _get_secret(key: str, default: str = "") -> str:
+    """Read from env vars first, then Streamlit secrets as fallback."""
+    val = os.getenv(key, "")
+    if val:
+        return val
+    try:
+        import streamlit as st
+        return st.secrets.get(key, default)
+    except Exception:
+        return default
+
+
 @dataclass
 class Settings:
     """Central configuration for the EchoWrite system."""
 
     # --- API Keys ---
-    GEMINI_API_KEY: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
+    GEMINI_API_KEY: str = field(default_factory=lambda: _get_secret("GEMINI_API_KEY"))
 
     # --- Model Defaults ---
     MODEL_NAME: str = field(default_factory=lambda: os.getenv("MODEL_NAME", "gemini-2.5-flash"))
