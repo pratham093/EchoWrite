@@ -53,7 +53,10 @@ class VoiceInterface:
         self.recognizer = sr.Recognizer() if SPEECH_RECOGNITION_AVAILABLE else None
 
         if PYGAME_AVAILABLE:
-            pygame.mixer.init()
+            try:
+                pygame.mixer.init()
+            except Exception:
+                pass
 
         self.is_speaking = False
         self.voice_queue: queue.Queue[str | None] = queue.Queue()
